@@ -1,96 +1,26 @@
-# 모델 정의서: ollama_service.py
+# 모델 정의서: ollama_service.py / inference_service.py (제거됨)
 
-## 개요
+## 상태: 삭제됨 (2026-08-04)
 
-| 항목 | 내용 |
+`SimulApp/ollama_service.py` (포트 8001, GGUF+Ollama 등록용)는 2026-06-25에 이미 삭제되었고,
+그 후속으로 `SimulApp/inference_service.py`(포트 9999, `.venvg3` 환경에서 HuggingFace 모델을
+직접 로드해 채팅 추론을 제공하던 FastAPI 서비스)가 사용되고 있었습니다.
+
+`inference_service.py`가 `server.js`에 의해 자동 spawn되면서, 모델 로드(torch/transformers
+checkpoint shard 로딩)가 SimulApp 기동 과정에 결합되어 웹 UI가 제대로 로딩되지 않는 문제가
+발생했습니다. 이에 따라 SimulApp을 파인튜닝/병합/GGUF 변환 관리 전용으로 가볍게 유지하기 위해
+멀티모달 추론 관련 코드를 전부 제거했습니다.
+
+**제거된 항목:**
+
+| 파일 | 처리 |
 |------|------|
-| 파일명 | `SimulApp/ollama_service.py` |
-| 목적 | GGUF 모델 Ollama 등록·관리 및 멀티모달 채팅 테스트 |
-| 실행 환경 | `.venvgguf` (Python 3.12.3) |
-| 포트 | 8001 |
-| 의존 서비스 | Ollama (포트 11434) |
+| `SimulApp/inference_service.py` | 삭제 |
+| `SimulApp/server.js` | `INFER_SERVICE_SCRIPT`/`INFER_SERVICE_PORT`, `inferServiceProc`, `inferServiceAvailable`, `startInferService()`, `GET /api/infer/status` 라우트, 프로세스 종료 시 추론서비스 kill 로직 제거 |
+| `SimulApp/public/index.html` | "🤖 멀티모달 추론" 탭 버튼·패널, 채팅 UI(`chatHistory`, `sendChat()` 등 관련 JS/CSS) 전체 제거 |
 
----
+**현재 상태:** SimulApp은 DB(`my8003.gabiadb.com/hkcodedb`) 연결만 있으면 파인튜닝/병합/GGUF
+관리 기능이 정상 동작하며, 추론 관련 프로세스를 spawn하지 않습니다. 멀티모달 추론 서비스는
+별도 프로젝트로 분리하여 개발 예정입니다.
 
-## 실행 방법
-
-server.js 기동 시 자동 실행됩니다. 수동 실행:
-
-```bash
-/home/wyhwang/multimodal_training/.venvgguf/bin/python SimulApp/ollama_service.py
-```
-
-설치 필요 패키지 (`.venvgguf` 기준):
-
-```bash
-pip install fastapi uvicorn python-multipart
-```
-
----
-
-## 함수 구조
-
-| 함수 / 엔드포인트 | 역할 |
-|-----------------|------|
-| `readGgufMeta(filePath)` | GGUF 헤더에서 `general.architecture`, `general.name` 추출 |
-| `buildModelfile(ggufPath, arch)` | 아키텍처별 Modelfile 템플릿 생성 |
-| `isExcluded(filePath)` | llama.cpp 내부 파일 등 제외 여부 판별 |
-| `GET /gguf/list` | 프로젝트 전체 .gguf 파일 스캔 (10MB 이상만) |
-| `POST /gguf/metadata` | GGUF 메타데이터 읽기 + Modelfile 초안 반환 |
-| `GET /ollama/models` | 등록된 Ollama 모델 목록 |
-| `POST /ollama/register` | Modelfile 저장 → `ollama create` 실행 |
-| `DELETE /ollama/model/{name}` | `ollama rm` 실행 |
-| `POST /ollama/chat` | 이미지 포함 채팅 → Ollama API 전달 |
-
----
-
-## 아키텍처별 Modelfile 템플릿
-
-| `general.architecture` | 모델 계열 | stop 토큰 |
-|----------------------|---------|---------|
-| `gemma3` | Gemma 3 | `<end_of_turn>` |
-| `gemma` | Gemma 2 | `<end_of_turn>` |
-| `gemma4` | Gemma 4 | `<end_of_turn>` |
-| `llama` | Llama 3.x | `<\|eot_id\|>` |
-| `qwen2` | Qwen 2 / 2.5 / 3 | `<\|im_end\|>` |
-| `phi3` | Phi 3 / 4 | `<\|end\|>` |
-| `mistral` | Mistral / Mixtral | `[/INST]` |
-| `command-r` | Cohere Command R | `<\|END_OF_TURN_TOKEN\|>` |
-
-감지 실패 시 사용자가 직접 Modelfile 텍스트박스에서 편집 가능.
-
----
-
-## 이미지 처리 흐름 (멀티모달)
-
-1. 브라우저에서 이미지 파일 선택 → `multipart/form-data` 전송
-2. `POST /ollama/chat` 수신 → `PIL.Image` 로드
-3. 최대 1024px 리사이즈 (LANCZOS)
-4. PNG → base64 인코딩
-5. Ollama `POST /api/chat` 에 `images: [base64_str]` 포함 전송
-
----
-
-## GGUF 스캔 규칙
-
-- 스캔 루트: `multimodal_training/` (프로젝트 최상위)
-- 제외 디렉터리: `llama.cpp`, `.venvg3`, `.venvgguf`, `__pycache__`
-- 10 MB 미만 파일 제외 (vocab 파일 필터링)
-
----
-
-## Modelfile 저장 경로
-
-등록 시 생성된 Modelfile:
-
-```
-SimulApp/modelfiles/{modelName}.Modelfile
-```
-
----
-
-## 변경 이력
-
-| 날짜 | 내용 |
-|------|------|
-| 2026-06-25 | 초기 생성 — GGUF 메타데이터 읽기, Ollama 모델 등록/삭제, 멀티모달 채팅 |
+**관련 로그:** `docs/rev_log.md` — "SimulApp — 멀티모달 추론 서비스 전면 제거" 항목 참고.

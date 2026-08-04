@@ -274,8 +274,12 @@ class DbLogCallback(TrainerCallback):
 SYSTEM_MESSAGE = '당신은 멀티모달 도우미입니다. 텍스트 질문에는 정확히 답하고, 이미지가 주어지면 이미지를 보고 답하세요.'
 
 
-def buildMessages(example):
-    """샘플 데이터를 모달리티(텍스트/이미지+텍스트)에 따라 모델 메시지 구조로 변환"""
+def buildMessages(example, mergeSystemToUser=False):
+    """샘플 데이터를 모달리티(텍스트/이미지+텍스트)에 따라 모델 메시지 구조로 변환
+    mergeSystemToUser=True 이고 이미지가 있는 샘플이면 system 프롬프트를 별도 턴으로 만들지 않고
+    user 턴 텍스트 앞에 합침 (Llama 3.2 Vision 등 이미지+system 메시지 동시 사용을 금지하는
+    채팅 템플릿 대응 — Gemma3 처럼 system+이미지를 지원하는 모델은 mergeSystemToUser=False 로 기존과 동일하게 동작)
+    """
     instruction = str(example.get('instruction', '')).strip()
     userInput   = str(example.get('input', '')).strip()
     output      = str(example.get('output', '')).strip()
@@ -289,21 +293,48 @@ def buildMessages(example):
     if not userText:
         userText = '주어진 정보를 바탕으로 답하세요.'
 
-    userContent = []
-    if modality == 'image_text' and example.get('image') is not None:
-        userContent.append({'type': 'image', 'image': example['image']})
-    userContent.append({'type': 'text', 'text': userText})
+    hasImage = modality == 'image_text' and example.get('image') is not None
 
-    messages = [
-        {'role': 'system',    'content': [{'type': 'text', 'text': SYSTEM_MESSAGE}]},
-        {'role': 'user',      'content': userContent},
-        {'role': 'assistant', 'content': [{'type': 'text', 'text': output}]},
-    ]
+    userContent = []
+    if hasImage:
+        userContent.append({'type': 'image', 'image': example['image']})
+
+    if mergeSystemToUser and hasImage:
+        userContent.append({'type': 'text', 'text': f"{SYSTEM_MESSAGE}\n\n{userText}"})
+        messages = [
+            {'role': 'user',      'content': userContent},
+            {'role': 'assistant', 'content': [{'type': 'text', 'text': output}]},
+        ]
+    else:
+        userContent.append({'type': 'text', 'text': userText})
+        messages = [
+            {'role': 'system',    'content': [{'type': 'text', 'text': SYSTEM_MESSAGE}]},
+            {'role': 'user',      'content': userContent},
+            {'role': 'assistant', 'content': [{'type': 'text', 'text': output}]},
+        ]
     return messages
+
+
+def systemMsgSupportsImage(processor):
+    """system 역할과 이미지가 한 대화에 공존 가능한 채팅 템플릿인지 1회 프로브로 확인"""
+    dummyImage    = Image.new('RGB', (8, 8), color=(0, 0, 0))
+    probeMessages = [
+        {'role': 'system', 'content': [{'type': 'text', 'text': 'probe'}]},
+        {'role': 'user',   'content': [{'type': 'image', 'image': dummyImage}, {'type': 'text', 'text': 'probe'}]},
+    ]
+    try:
+        processor.apply_chat_template(probeMessages, tokenize=False, add_generation_prompt=False)
+        return True
+    except Exception:
+        return False
 
 
 def getCollateFn(processor, model):
     """processor와 model을 캡처한 collate_fn 클로저 반환"""
+
+    mergeSystemToUser = not systemMsgSupportsImage(processor)
+    if mergeSystemToUser:
+        print('[collateFn] 채팅 템플릿이 system+이미지 동시 사용을 지원하지 않음 — system 프롬프트를 user 턴에 병합')
 
     def _mergeMixedBatch(imgBatch, txtBatch, imgIdx, txtIdx, totalSize):
         """혼합 배치의 이미지/텍스트 서브배치를 원본 순서로 병합"""
@@ -338,8 +369,28 @@ def getCollateFn(processor, model):
                 outTensor[txtIdx[k]] = txtPadded[k]
             mergedDict[key] = outTensor
 
-        if "pixel_values" in imgBatch:
-            mergedDict["pixel_values"] = imgBatch["pixel_values"]
+        # cross_attention_mask (Llama 3.2 Vision/Mllama 계열): (배치, 텍스트길이, 이미지수, 타일수) 형태.
+        # 텍스트 축(dim=1)만 maxSeqLen 으로 패딩 후 원본 인덱스 위치에 배치, 이미지가 없는 텍스트 전용
+        # 샘플 자리는 0(어떤 이미지에도 cross-attention 하지 않음)으로 채움. Gemma3 등 이 키가 없는
+        # 모델은 아래 if 문에서 걸러져 기존 동작 그대로 유지됨.
+        crossAttnKey = "cross_attention_mask"
+        handledKeys  = list(seqKeys)
+        if crossAttnKey in imgBatch:
+            imgCam    = imgBatch[crossAttnKey]
+            camPadded = torch.nn.functional.pad(imgCam, (0, 0, 0, 0, 0, maxSeqLen - imgSeqLen))
+            outCam    = torch.zeros((totalSize, maxSeqLen) + tuple(imgCam.shape[2:]), dtype=imgCam.dtype)
+            for k in range(0, len(imgIdx)):
+                outCam[imgIdx[k]] = camPadded[k]
+            mergedDict[crossAttnKey] = outCam
+            handledKeys.append(crossAttnKey)
+
+        # 이미지 서브배치에만 존재하는 나머지 키(pixel_values, aspect_ratio_ids, aspect_ratio_mask 등)는
+        # 텍스트 전용 샘플에 대응 항목이 없으므로 그대로 전달 — 모델이 이미지 토큰 등장 순서대로 매칭함
+        imgBatchKeys = list(imgBatch.keys())
+        for ki in range(0, len(imgBatchKeys)):
+            key = imgBatchKeys[ki]
+            if key not in handledKeys:
+                mergedDict[key] = imgBatch[key]
 
         return mergedDict
 
@@ -351,14 +402,18 @@ def getCollateFn(processor, model):
 
         for i in range(0, len(examples)):
             example  = examples[i]
-            messages = buildMessages(example)
+            messages = buildMessages(example, mergeSystemToUser)
             text = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False
             )
             allTexts.append(text)
 
             sampleImage = None
-            userContent = messages[1]["content"]
+            userContent = []
+            for m in range(0, len(messages)):
+                if messages[m]["role"] == "user":
+                    userContent = messages[m]["content"]
+                    break
             for j in range(0, len(userContent)):
                 if userContent[j]["type"] == "image":
                     sampleImage = userContent[j]["image"]
@@ -416,10 +471,11 @@ def getCollateFn(processor, model):
             labels[labels == padTokenId] = -100
 
         imageTokenId = getattr(model.config, "image_token_id", None)
+        if imageTokenId is None:
+            imageTokenId = getattr(model.config, "image_token_index", None)
         if imageTokenId is not None:
             labels[labels == imageTokenId] = -100
 
-        labels[labels == 262144] = -100
         batch["labels"] = labels
         return batch
 

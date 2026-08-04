@@ -15,7 +15,7 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const mysql2  = require('mysql2/promise');
 require('dotenv').config({ path: path.join(__dirname, '..', 'codeset', '.env') });
 
@@ -60,12 +60,6 @@ let PYTHON_GGUF_CMD = 'python';
 if (fs.existsSync(VENVGGUF_PY_WIN))      { PYTHON_GGUF_CMD = VENVGGUF_PY_WIN; }
 else if (fs.existsSync(VENVGGUF_PY_NIX)) { PYTHON_GGUF_CMD = VENVGGUF_PY_NIX; }
 console.log(`GGUF Python 경로: ${PYTHON_GGUF_CMD}`);
-
-// 멀티모달 추론 서비스 (inference_service.py, 포트 9999, .venvg3)
-const INFER_SERVICE_SCRIPT = path.join(__dirname, 'inference_service.py');
-const INFER_SERVICE_PORT   = 9999;
-let   inferServiceProc     = null;
-let   inferServiceAvailable = false;  // fastapi/uvicorn 설치 확인 후 true 로 변경
 
 // ============================================================
 // DB 풀
@@ -310,54 +304,6 @@ let ggufLogWatcher  = null;
 // 서버 시작 시 프로세스 복구
 // ============================================================
 
-/**
- * inference_service.py 를 .venvg3 Python 으로 실행 (포트 9999)
- * fastapi/uvicorn 미설치 시 에러 없이 스킵 → 탭 버튼만 비활성화
- */
-function startInferService() {
-  if (!fs.existsSync(INFER_SERVICE_SCRIPT)) {
-    console.warn('[추론서비스] inference_service.py 없음 — 스킵');
-    return;
-  }
-
-  // fastapi, uvicorn 설치 여부 사전 확인
-  const check = spawnSync(PYTHON_CMD, ['-c', 'import fastapi, uvicorn, multipart'], { encoding: 'utf8' });
-  if (check.status !== 0) {
-    console.warn('[추론서비스] fastapi/uvicorn/python-multipart 미설치 — 멀티모달 추론 탭 비활성화');
-    console.warn('[추론서비스] 설치: pip install fastapi uvicorn python-multipart');
-    inferServiceAvailable = false;
-    return;
-  }
-
-  inferServiceAvailable = true;
-  const pyCmd = PYTHON_CMD;
-  try {
-    inferServiceProc = spawn(pyCmd, ['-u', INFER_SERVICE_SCRIPT], {
-      detached: false,
-      stdio:    ['ignore', 'ignore', 'pipe'],
-    });
-    inferServiceProc.stderr.on('data', (d) => {
-      const msg = d.toString().trim();
-      if (msg && !msg.includes('INFO') && !msg.includes('WARNING')) {
-        console.warn('[추론서비스]', msg);
-      }
-    });
-    inferServiceProc.on('error', (err) => {
-      console.warn(`[추론서비스] 시작 실패: ${err.message}`);
-      inferServiceProc = null;
-    });
-    inferServiceProc.on('exit', (code) => {
-      if (code !== null && code !== 0) {
-        console.warn(`[추론서비스] 종료 (code=${code})`);
-      }
-      inferServiceProc = null;
-    });
-    console.log(`[추론서비스] 시작됨 (PID=${inferServiceProc.pid}, port=${INFER_SERVICE_PORT})`);
-  } catch (e) {
-    console.warn(`[추론서비스] spawn 실패: ${e.message}`);
-  }
-}
-
 function recoverProcesses() {
   // ── 파인튜닝 복구 ──
   const trainPid = readPidFile(TRAIN_PID_FILE);
@@ -414,22 +360,6 @@ recoverProcesses();
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-
-// ────────────────────────────────────────────────
-// GET /api/infer/status
-// ────────────────────────────────────────────────
-
-app.get('/api/infer/status', async (req, res) => {
-  if (!inferServiceAvailable) {
-    return res.json({ success: true, running: false, reason: 'fastapi/uvicorn/python-multipart 미설치' });
-  }
-  try {
-    const resp = await fetch(`http://127.0.0.1:${INFER_SERVICE_PORT}/status`, { signal: AbortSignal.timeout(2000) });
-    res.json({ success: true, running: resp.ok });
-  } catch {
-    res.json({ success: true, running: false });
-  }
-});
 
 // ────────────────────────────────────────────────
 // GET /api/db/status
@@ -922,10 +852,4 @@ app.listen(PORT, () => {
   console.log(`codeset 경로: ${CODESET_DIR}`);
   console.log(`로그 저장 경로: ${LOGS_DIR}`);
   console.log(`DB: ${process.env.DB_HOST}/${process.env.DB_NAME}`);
-  startInferService();
 });
-
-// 서버 종료 시 추론 서비스도 함께 종료
-process.on('exit',   () => { if (inferServiceProc) inferServiceProc.kill(); });
-process.on('SIGINT',  () => { if (inferServiceProc) inferServiceProc.kill(); process.exit(0); });
-process.on('SIGTERM', () => { if (inferServiceProc) inferServiceProc.kill(); process.exit(0); });

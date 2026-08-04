@@ -185,43 +185,6 @@
       background: #fff !important;
     }
 
-    /* ── Ollama 테스트 탭 ── */
-    #ollamaServiceBadge {
-      display: inline-block; padding: 3px 10px; border-radius: 10px;
-      font-size: 0.8rem; font-weight: 600; margin-left: 10px;
-    }
-    .service-ok  { background: #e8f5e9; color: #2e7d32; }
-    .service-err { background: #ffebee; color: #c62828; }
-
-    .arch-badge {
-      display: inline-block; padding: 3px 12px; border-radius: 10px;
-      background: #e8f5e9; color: #2e7d32; font-size: 0.82rem; font-weight: 600;
-    }
-    .model-list-table { width: 100%; border-collapse: collapse; font-size: 0.87rem; }
-    .model-list-table th { background: #e8eaf6; padding: 8px 12px; text-align: left; font-weight: 600; color: #555; }
-    .model-list-table td { padding: 8px 12px; border-bottom: 1px solid #eee; }
-
-    #registerLog {
-      background: #1a1a2e; color: #a5d6a7; font-family: monospace;
-      font-size: 0.8rem; padding: 12px; border-radius: 8px;
-      min-height: 60px; white-space: pre-wrap; margin-top: 12px;
-    }
-    #modelfileContent {
-      width: 100%; font-family: monospace; font-size: 0.82rem;
-      padding: 10px; border: 1px solid #ddd; border-radius: 6px;
-      resize: vertical; background: #fafafa;
-    }
-
-    /* 채팅 버블 */
-    #chatHistory { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
-    .chat-bubble {
-      padding: 12px 16px; border-radius: 12px; font-size: 0.88rem;
-      line-height: 1.65; white-space: pre-wrap; max-width: 88%;
-    }
-    .chat-user      { background: #e8eaf6; color: #1a1a2e; align-self: flex-end; margin-left: auto; }
-    .chat-assistant { background: #f1f8e9; color: #1b5e20; align-self: flex-start; }
-    .chat-error     { background: #ffebee; color: #c62828; align-self: flex-start; }
-    .img-preview-wrap { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
@@ -236,7 +199,6 @@
   <button class="tab-btn"        onclick="switchTab('res')">📊 시뮬레이션 결과</button>
   <button class="tab-btn"        onclick="switchTab('mrg')">🔀 모델 병합</button>
   <button class="tab-btn"        onclick="switchTab('gguf')">📦 GGUF 변환</button>
-  <button id="ollamaTabBtn" class="tab-btn" onclick="switchTab('ollama')">🤖 멀티모달 추론</button>
 </div>
 
 <!-- ============================================================ -->
@@ -813,67 +775,6 @@ GGUF 변환 로그가 여기에 표시됩니다...</div>
 
 </div>
 
-<!-- ============================================================ -->
-<!-- 탭 5: 멀티모달 추론 테스트                                    -->
-<!-- ============================================================ -->
-<div id="tab-ollama" class="tab-panel">
-
-  <!-- 서비스 상태 표시 -->
-  <div style="display:flex; align-items:center; margin-bottom:16px;">
-    <span style="font-size:0.9rem; color:#555;">멀티모달 추론 서비스 (포트 9999)</span>
-    <span id="ollamaServiceBadge" class="service-err">연결 확인 중...</span>
-    <button class="btn" style="padding:5px 12px; margin-left:8px; background:#e8eaf6; color:#5c6bc0;" onclick="checkOllamaService()">🔄 확인</button>
-    <span id="modelStatusBadge" style="margin-left:12px; font-size:0.82rem; color:#888;"></span>
-  </div>
-
-  <!-- 채팅 테스트 -->
-  <div class="card">
-    <h2>💬 채팅 테스트 <span style="font-size:0.82rem; color:#888; font-weight:400;">— 이미지 첨부 시 멀티모달 추론</span></h2>
-
-    <div class="form-group" style="margin-bottom:12px;">
-      <label class="field-label">시스템 프롬프트 <span style="font-size:0.78rem; color:#999; font-weight:400;">(선택)</span></label>
-      <textarea id="systemPrompt" rows="2" style="padding:8px; border:1px solid #ddd; border-radius:6px; font-size:0.88rem; resize:vertical;" placeholder="예: 당신은 OCR 전문가입니다. 이미지의 텍스트를 정확히 인식하세요."></textarea>
-    </div>
-
-    <div style="display:flex; gap:16px; margin-bottom:12px;">
-      <div style="flex:1;">
-        <label class="field-label">최대 토큰 수</label>
-        <input type="number" id="maxNewTokens" value="256" min="32" max="2048" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:0.88rem;">
-      </div>
-      <div style="flex:1;">
-        <label class="field-label">Temperature</label>
-        <input type="number" id="inferTemperature" value="0.2" min="0" max="2" step="0.05" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:0.88rem;">
-      </div>
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label class="field-label" style="margin-bottom:6px;">이미지 첨부 <span style="font-size:0.78rem; color:#999; font-weight:400;">(선택)</span></label>
-      <div class="img-preview-wrap">
-        <label style="display:inline-flex; align-items:center; gap:6px; padding:8px 16px; background:#e8eaf6; border-radius:6px; cursor:pointer; font-size:0.88rem; color:#5c6bc0; font-weight:600;">
-          📎 이미지 선택
-          <input type="file" id="chatImage" accept="image/*" style="display:none;" onchange="previewChatImage(event)">
-        </label>
-        <button class="btn" style="padding:8px 12px; background:#ef9a9a; color:#fff;" onclick="clearChatImage()">✕ 제거</button>
-        <img id="imagePreview" style="max-height:80px; max-width:160px; border-radius:6px; border:1px solid #ddd; display:none; object-fit:cover;">
-        <span id="imageFileName" style="font-size:0.82rem; color:#888; align-self:center;"></span>
-      </div>
-    </div>
-
-    <div class="form-group" style="margin-bottom:12px;">
-      <label class="field-label">메시지</label>
-      <textarea id="chatMessage" rows="3" style="padding:8px; border:1px solid #ddd; border-radius:6px; font-size:0.88rem; resize:vertical;" placeholder="질문을 입력하세요..."></textarea>
-    </div>
-
-    <div class="btn-row">
-      <button class="btn btn-start" onclick="sendChat()" id="sendChatBtn">▶ 전송</button>
-      <button class="btn" style="background:#546e7a; color:#fff;" onclick="clearChatHistory()">🗑 대화 초기화</button>
-    </div>
-
-    <div id="chatHistory"></div>
-  </div>
-
-</div>
-
 <script>
 'use strict';
 
@@ -891,14 +792,10 @@ function switchTab(name) {
 
   document.getElementById('tab-' + name).classList.add('active');
 
-  if (name === 'ollama') {
-    checkOllamaService();
-  }
   if      (name === 'cfg')    { buttons[0].classList.add('active'); }
   else if (name === 'res')    { buttons[1].classList.add('active'); loadSimulations(); }
   else if (name === 'mrg')    { buttons[2].classList.add('active'); loadMergeConfig(); }
   else if (name === 'gguf')   { buttons[3].classList.add('active'); loadGgufConfig(); }
-  else if (name === 'ollama') { buttons[4].classList.add('active'); }
 }
 
 // ── 설정 로드 ────────────────────────────────────
@@ -1358,131 +1255,6 @@ function updateGgufBadge(running) {
   else         { badge.textContent = '대기 중';   badge.className = 'status-badge status-idle'; }
 }
 
-// ============================================================
-// 멀티모달 추론 탭
-// ============================================================
-
-var OLLAMA_API = window.location.protocol + '//' + window.location.hostname + ':9999';
-
-// ── 서비스 연결 확인 ─────────────────────────────
-async function checkOllamaService() {
-  var badge       = document.getElementById('ollamaServiceBadge');
-  var modelBadge  = document.getElementById('modelStatusBadge');
-  var tabBtn      = document.getElementById('ollamaTabBtn');
-  try {
-    var r = await fetch(OLLAMA_API + '/status', { signal: AbortSignal.timeout(3000) });
-    var j = await r.json();
-    badge.textContent = '● 서비스 정상';
-    badge.className   = 'service-ok';
-    if (tabBtn) {
-      tabBtn.disabled    = false;
-      tabBtn.title       = '';
-      tabBtn.textContent = '🤖 멀티모달 추론';
-    }
-    if (modelBadge) {
-      if (j.status === 'ready') {
-        modelBadge.textContent = '모델 로드 완료: ' + (j.model || '');
-        modelBadge.style.color = '#388e3c';
-      } else if (j.status === 'loading') {
-        modelBadge.textContent = '모델 로딩 중...';
-        modelBadge.style.color = '#f57c00';
-      } else if (j.status === 'no_model') {
-        modelBadge.textContent = '.env의 MERGED_MODEL_REPO 미설정';
-        modelBadge.style.color = '#c62828';
-      } else {
-        modelBadge.textContent = '모델 로드 실패 (서버 로그 확인)';
-        modelBadge.style.color = '#c62828';
-      }
-    }
-    return true;
-  } catch (e) {
-    badge.textContent = '● 서비스 오프라인 (포트 9999)';
-    badge.className   = 'service-err';
-    if (tabBtn) {
-      tabBtn.disabled    = true;
-      tabBtn.title       = '추론 서비스 미실행 — 서버 재시작 필요';
-      tabBtn.textContent = '🤖 멀티모달 추론 (미실행)';
-    }
-    if (modelBadge) { modelBadge.textContent = ''; }
-    return false;
-  }
-}
-
-// ── 이미지 미리보기 ──────────────────────────────
-function previewChatImage(event) {
-  var file = event.target.files[0];
-  if (!file) return;
-  var preview  = document.getElementById('imagePreview');
-  var nameSpan = document.getElementById('imageFileName');
-  preview.src          = URL.createObjectURL(file);
-  preview.style.display = 'block';
-  nameSpan.textContent  = file.name + ' (' + (file.size / 1024).toFixed(0) + ' KB)';
-}
-
-function clearChatImage() {
-  document.getElementById('chatImage').value = '';
-  var preview = document.getElementById('imagePreview');
-  preview.src           = '';
-  preview.style.display = 'none';
-  document.getElementById('imageFileName').textContent = '';
-}
-
-// ── 채팅 버블 추가 ───────────────────────────────
-function appendChatBubble(role, content) {
-  var histEl = document.getElementById('chatHistory');
-  var div    = document.createElement('div');
-  div.className   = 'chat-bubble chat-' + role;
-  div.textContent = content;
-  histEl.appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-}
-
-function clearChatHistory() {
-  document.getElementById('chatHistory').innerHTML = '';
-}
-
-// ── 채팅 전송 ────────────────────────────────────
-async function sendChat() {
-  var message      = document.getElementById('chatMessage').value.trim();
-  var systemPrompt = document.getElementById('systemPrompt').value;
-  var imageFile    = document.getElementById('chatImage').files[0];
-  var maxNewTokens = parseInt(document.getElementById('maxNewTokens').value) || 256;
-  var temperature  = parseFloat(document.getElementById('inferTemperature').value) || 0.2;
-  var btn          = document.getElementById('sendChatBtn');
-
-  if (!message) { alert('메시지를 입력하세요.'); return; }
-
-  btn.disabled    = true;
-  btn.textContent = '⏳ 응답 대기 중...';
-
-  var userLabel = message + (imageFile ? '\n[이미지: ' + imageFile.name + ']' : '');
-  appendChatBubble('user', userLabel);
-
-  try {
-    var fd = new FormData();
-    fd.append('message',      message);
-    fd.append('systemPrompt', systemPrompt);
-    fd.append('maxNewTokens', maxNewTokens);
-    fd.append('temperature',  temperature);
-    if (imageFile) { fd.append('image', imageFile); }
-
-    var r = await fetch(OLLAMA_API + '/chat', { method: 'POST', body: fd });
-    var j = await r.json();
-
-    if (j.success) {
-      appendChatBubble('assistant', j.response);
-      document.getElementById('chatMessage').value = '';
-    } else {
-      appendChatBubble('error', '에러: ' + j.message);
-    }
-  } catch (e) {
-    appendChatBubble('error', '연결 실패: 추론 서비스(포트 9999) 확인');
-  }
-
-  btn.disabled    = false;
-  btn.textContent = '▶ 전송';
-}
-
 // ── 초기화 (재접속 시 기존 로그·상태 즉시 복원) ──
 (async function init() {
   await loadConfig();
@@ -1535,20 +1307,6 @@ async function sendChat() {
     if (j3.running) {
       updateGgufBadge(true);
       if (!ggufPollTimer) { ggufPollTimer = setInterval(pollGgufStatus, 2000); }
-    }
-  } catch (e) {}
-
-  // 추론 서비스 초기 상태 확인 — 미실행/미설치 시 탭 버튼 비활성화
-  try {
-    var r4   = await fetch('/api/infer/status');
-    var j4   = await r4.json();
-    var oBtn = document.getElementById('ollamaTabBtn');
-    if (oBtn && !j4.running) {
-      oBtn.disabled    = true;
-      oBtn.textContent = '🤖 멀티모달 추론 (미실행)';
-      oBtn.title       = j4.reason
-        ? j4.reason + ' — pip install fastapi uvicorn python-multipart 후 서버 재시작'
-        : '추론 서비스 미실행 — 서버 재시작 필요';
     }
   } catch (e) {}
 })();
