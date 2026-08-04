@@ -1,5 +1,106 @@
 # 수정 로그
 
+## 2026-08-04 (추가 4)
+
+### ★02. 파인튜닝_멀티모달데이터_Gemma3.py / .ipynb (Llama 3.2 Vision 혼합 배치 지원 — cross_attention_mask 등)
+
+**문제:** 실제 `unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit`(Mllama, 비게이트 미러) 모델로
+end-to-end 검증 중, 이미지 샘플과 텍스트 샘플이 섞인 배치에서 `_mergeMixedBatch()`가
+`input_ids`/`attention_mask`/`token_type_ids`와 `pixel_values`만 명시적으로 처리하고 있어
+Mllama가 요구하는 `aspect_ratio_ids`, `aspect_ratio_mask`, `cross_attention_mask` 텐서가
+누락되어 forward pass에서 `ValueError: aspect_ratio_ids must be provided if pixel_values is
+provided` 로 실패함. 순수 이미지 전용 배치(혼합 아님)에서는 이 문제가 없었음 — 혼합 배치
+전용 병합 함수의 하드코딩된 키 목록이 원인.
+
+**변경 내용:**
+
+| 파일 | 위치 | 변경 내용 |
+|------|------|-----------|
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.py` | `getCollateFn` 내 `_mergeMixedBatch` | `cross_attention_mask` 전용 처리 추가(텍스트 축 패딩 + 텍스트 전용 샘플 자리는 0으로 채움), 이미지 서브배치의 나머지 키(`pixel_values`, `aspect_ratio_ids`, `aspect_ratio_mask` 등)를 하드코딩 대신 자동으로 훑어 통과시키도록 일반화 |
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.ipynb` | 셀 `35954667` (`_mergeMixedBatch`) | 동일하게 수정 |
+| `codeset/docs/★02. 파인튜닝_멀티모달데이터_Gemma3.md` | — | `_mergeMixedBatch` 동작 설명 갱신, 변경 이력 추가 |
+
+**실제 검증 (B200 GPU, unsloth 4bit 미러 모델 다운로드 후 직접 실행):**
+- Gemma3(`google/gemma-3-4b-it`, config-only): 회귀 없음 — 이미지 토큰 256개 전부 정상 마스킹, batch shape 동일
+- Llama 3.2 Vision 이미지+텍스트 혼합 배치: 수정 전 `aspect_ratio_ids` 에러로 실패 → 수정 후 forward pass 성공 (loss=4.64)
+
+**참고:** `meta-llama/Llama-3.2-11B-Vision-Instruct` 공식 레포는 테스트 시점 기준 `.env`의 HF_TOKEN
+계정에서 게이트 미승인(401) 상태라 비게이트 커뮤니티 미러로 검증함. 승인 완료 후 공식 레포로도
+동일하게 동작할 것으로 예상.
+
+---
+
+## 2026-08-04 (추가 3)
+
+### ★02. 파인튜닝_멀티모달데이터_Gemma3.py / .ipynb (system 메시지 + 이미지 호환성 — Llama 3.2 Vision 대응)
+
+**문제:** `buildMessages()`가 항상 `system`/`user`/`assistant` 3턴을 만들었는데, Llama 3.2 Vision
+(Mllama)의 공식 채팅 템플릿은 이미지가 포함된 대화에서 system 역할 사용을 금지함
+(`jinja2.exceptions.TemplateError: Prompting with images is incompatible with system messages.`).
+Gemma3는 이 조합이 허용되어 문제없었지만, `BASE_MODEL`을 Llama 3.2 Vision으로 바꾸면 학습이
+템플릿 렌더링 단계에서 바로 실패함.
+
+**변경 내용:**
+
+| 파일 | 위치 | 변경 내용 |
+|------|------|-----------|
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.py` | `buildMessages` | `mergeSystemToUser` 파라미터 추가 — `True`+이미지 샘플이면 system 텍스트를 user 턴 앞에 합치고 별도 system 턴을 생략 |
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.py` | 신규 `systemMsgSupportsImage(processor)` | 더미 이미지+system 메시지로 실제 채팅 템플릿을 1회 프로브해서 지원 여부 판별 |
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.py` | `getCollateFn` | 시작 시 프로브 실행해 `mergeSystemToUser` 결정, `collateFn`의 user 턴 탐색을 `messages[1]` 인덱스 고정 → `role == "user"` 탐색으로 변경(병합 시 메시지 순서가 바뀌므로) |
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.ipynb` | 셀 `3fcbdab0`(`buildMessages`), `35954667`(`collate_fn`) | 동일하게 수정 |
+
+**실제 검증 (B200 GPU, `unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit` 비게이트 미러로 실제 로드):**
+- Gemma3: `systemMsgSupportsImage=True` → 기존과 동일하게 system 턴 유지, 이미지 토큰 256개 정상 마스킹 (회귀 없음)
+- Llama 3.2 Vision: `systemMsgSupportsImage=False` 자동 감지 → system이 user 턴에 병합되어 템플릿 렌더링 성공, 이미지 토큰(128256) 정상 마스킹
+
+---
+
+## 2026-08-04 (추가 2)
+
+### ★02. 파인튜닝_멀티모달데이터_Gemma3.py / .ipynb (이미지 토큰 loss 마스킹 하드코딩 제거)
+
+**문제:** `collateFn`(노트북은 `collate_fn`) 안에 `labels[labels == 262144] = -100` 라는 Gemma3 전용
+이미지 토큰 ID가 하드코딩되어 있어, `BASE_MODEL` 을 다른 모델 계열(예: Llama 3.2 Vision, Llama4)로
+바꾸면 이미지 토큰이 loss에서 제외되지 않는 문제가 있었음. 에러 없이 조용히 학습 품질이 저하되는
+방식이라 발견하기 어려움.
+
+**변경 내용:**
+
+| 파일 | 위치 | 변경 전 | 변경 후 |
+|------|------|---------|---------|
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.py` | `getCollateFn` 내 `collateFn` | `labels[labels == 262144] = -100` 하드코딩 | `getattr(model.config, "image_token_id", None)` → 없으면 `getattr(model.config, "image_token_index", None)` 순으로 동적 조회 후 마스킹 |
+| `★02. 파인튜닝_멀티모달데이터_Gemma3.ipynb` | 셀 `35954667` (`collate_fn`) | 동일 하드코딩 | 동일하게 동적 조회로 수정 |
+
+**근거:** Gemma3Config는 `image_token_id`(=262144)를 직접 노출하지만, Mllama(Llama 3.2 Vision)와
+Llama4Config는 `image_token_index`(각각 128256, 200092)만 제공 — 모델 계열마다 속성명이 달라
+하드코딩 대신 두 속성을 순서대로 조회하도록 변경. 상세는 `codeset/docs/★02. 파인튜닝_멀티모달데이터_Gemma3.md`
+참고.
+
+---
+
+## 2026-08-04
+
+### SimulApp — 멀티모달 추론 서비스 전면 제거 (경량화)
+
+**문제:** `server.js`가 기동 시 `inference_service.py`(FastAPI, 포트 9999)를 자동 spawn했는데,
+이 프로세스가 `.venvg3` 환경에서 병합 모델을 HuggingFace `from_pretrained()`로 로드하면서
+(torch/transformers checkpoint shard 로딩, deprecated `on_event` 경고 등) SimulApp 웹 UI가
+제대로 로딩되지 않는 경우가 발생. 추론 서비스는 별도 프로젝트로 분리 개발하기로 결정.
+
+**변경 파일:**
+
+| 파일 | 변경 내용 |
+|------|----------|
+| `SimulApp/inference_service.py` | 삭제 |
+| `SimulApp/server.js` | `INFER_SERVICE_SCRIPT`/`INFER_SERVICE_PORT`/`inferServiceProc`/`inferServiceAvailable` 변수 제거, `startInferService()` 함수 제거, `app.listen()` 콜백에서 호출 제거, `GET /api/infer/status` 라우트 제거, 프로세스 종료 핸들러(`exit`/`SIGINT`/`SIGTERM`)에서 추론서비스 kill 로직 제거, 미사용 `spawnSync` import 제거 |
+| `SimulApp/public/index.html` | "🤖 멀티모달 추론" 탭 버튼 및 `tab-ollama` 패널(채팅 테스트 UI) 제거, 관련 JS(`OLLAMA_API`, `checkOllamaService`, `previewChatImage`, `clearChatImage`, `appendChatBubble`, `clearChatHistory`, `sendChat`) 제거, `switchTab()`의 `ollama` 분기 및 `init()`의 `/api/infer/status` 확인 로직 제거, 이미 죽은 이전 Ollama 등록 탭 잔재 CSS(`.service-ok/err`, `.chat-*`, `.arch-badge`, `.model-list-table`, `#registerLog`, `#modelfileContent`)도 함께 정리 |
+| `codeset/docs/ollama_service.md` | 삭제된 서비스로 문서 갱신 (모델정의서 → 제거 이력 기록) |
+
+**효과:** SimulApp은 이제 DB 연결만 되면 파인튜닝/병합/GGUF 변환 관리 기능이 torch/transformers
+로딩 없이 즉시 기동됨. 포트 9999 프로세스가 더 이상 실행되지 않음.
+
+---
+
 ## 2026-06-25 (추가 4)
 
 ### SimulApp — Ollama 잔재 제거 + inference_service.py 코딩 스타일 정비
